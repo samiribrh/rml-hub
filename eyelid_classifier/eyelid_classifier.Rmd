@@ -1,0 +1,398 @@
+---
+title: "Eyelid Classifier"
+author: "Samir Ibrahimov"
+date: "2025-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  error = FALSE
+  )
+```
+
+## Step 1: Load Libraries and Datasets
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(caret)
+library(e1071)
+library(class)
+library(randomForest)
+library(adabag)
+library(xgboost)
+library(MLmetrics)
+library(kableExtra)
+library(kernlab)
+
+# Load  training and test datasets
+train <- read.csv("eeg_eyelid_training.csv")
+test <- read.csv("eeg_eyelid_test.csv")
+```
+
+## Step 2: Exploratory Data Analysis (EDA)
+
+In this section, we perform exploratory data analysis to understand the structure of the EEG dataset. We'll check for missing values, assess the balance of the target variable (`label`), and visualize the distributions of the numerical features.
+
+### Check for Missing Values
+
+```{r check-na}
+colSums(is.na(train))
+```
+
+The output shows that EEG3, EEG6, and EEG9 contain missing values:
+
+EEG3 has 9 missing values;
+
+EEG6 has a significant amount with 7837 missing values;
+
+EEG9 has 5 missing values.
+
+All other columns, including the target label (Class), are complete.
+Since EEG6 has too many missing entries, it might be best to drop this feature. For EEG3 and EEG9, since the null value number is minimal, we can impute these values.
+
+
+## Step 3: Data Preprocessing
+
+To prepare the data for model training, we remove or impute missing values and convert the label to a categorical variable.
+
+- EEG6 is removed because it contains over 7,000 missing values.
+- EEG3 and EEG9 are imputed using their respective column means.
+- The label column `Class` is renamed to `label` and converted to a factor.
+
+```{r preprocessing}
+# Remove EEG6
+train <- train %>% select(-EEG6)
+
+# Impute missing values in EEG3 and EEG9 using column means
+train$EEG3[is.na(train$EEG3)] <- mean(train$EEG3, na.rm = TRUE)
+train$EEG9[is.na(train$EEG9)] <- mean(train$EEG9, na.rm = TRUE)
+
+# Ensure the target is a factor
+train$label <- as.factor(train$Class)
+train <- train %>% select(-Class)  # Remove old Class column
+
+# Last check
+colSums(is.na(train))
+```
+
+## Step 4.1: Decision Tree Classifier
+
+We now train a Decision Tree to classify whether the eyelids are open or closed.
+
+```{r decision-tree-training}
+set.seed(123)
+
+# Define training control
+ctrl <- trainControl(method = "cv", number = 10)
+
+# Train the decision tree model
+dt_model <- train(label ~ ., data = train, method = "rpart", trControl = ctrl)
+
+# Show model details
+dt_model
+```
+
+The model is trained using 10-fold cross-validation. The output includes accuracy on each fold and the chosen complexity parameter (cp). Next, we generate predictions and evaluate the model on the training set.
+
+```{r}
+# Predict on training data
+dt_preds <- predict(dt_model, newdata = train)
+
+# Confusion matrix
+confusionMatrix(dt_preds, train$label)
+```
+
+The confusion matrix shows how well the model performs on the training set. We’ll later use the test set to compare performance across all models.
+
+## Step 4.2: Support Vector Machine (SVM)
+
+In this step, we train a Support Vector Machine (SVM) using the radial basis function (RBF) kernel. This allows the model to draw more flexible boundaries between the two classes.
+
+```{r svm-training}
+set.seed(123)
+
+svm_model <- train(
+  label ~ .,
+  data = train,
+  method = "svmRadial",
+  trControl = ctrl,
+  preProcess = c("center", "scale"),
+  tuneLength = 5
+)
+
+# Show the best model and accuracy
+svm_model
+```
+
+The SVM model was trained using a radial basis function (RBF) kernel. It tested five values of the regularization parameter `C`, and the best result came from C = 4 as we can see from the output. The kernel parameter `sigma` was held constant.
+
+ Now we check how it performs on the training set:
+
+```{r}
+svm_preds <- predict(svm_model, newdata = train)
+confusionMatrix(svm_preds, train$label)
+```
+
+The SVM achieved better results than the Decision Tree. This means the SVM is very strong at identifying open eyelids, and better than the Decision Tree at identifying closed eyelids, though there's still room for improvement in detecting class 1.
+
+## Step 4.3: K-Nearest Neighbors (KNN)
+
+Now we train a K-Nearest Neighbors (KNN) classifier. KNN classifies a new observation based on the most common class among its K nearest neighbors in the training data.
+
+We also apply centering and scaling since KNN is sensitive to distance, and different feature scales would distort the distance measure.
+
+```{r knn-training}
+set.seed(123)
+
+knn_model <- train(
+  label ~ .,
+  data = train,
+  method = "knn",
+  trControl = ctrl,
+  preProcess = c("center", "scale"),
+  tuneLength = 10
+)
+
+# Output model info
+knn_model
+```
+
+Now let’s predict using the trained KNN model and evaluate its performance on the training set:
+
+```{r}
+knn_preds <- predict(knn_model, newdata = train)
+confusionMatrix(knn_preds, train$label)
+```
+
+These results show that KNN does a good job at identifying both open and closed eyelids, better than the Decision Tree and slightly better than the SVM on the training set.
+
+## Step 4.4.1: Random Forest
+
+Random Forest builds many decision trees and takes the majority vote of their predictions. It's good at handling noisy data and avoids overfitting better than a single tree.
+
+```{r rf-training}
+set.seed(123)
+
+rf_model <- train(
+  label ~ .,
+  data = train,
+  method = "rf",
+  trControl = ctrl,
+  tuneLength = 5
+)
+
+# Show Random Forest model details
+rf_model
+
+```
+The Random Forest model selected `mtry = 11`, meaning each tree in the forest was trained using 11 randomly chosen features.
+
+Now let’s predict using the trained Random Forest model and evaluate its performance on the training set:
+
+```{r}
+# Predict on training set
+rf_preds <- predict(rf_model, newdata = train)
+confusionMatrix(rf_preds, train$label)
+```
+
+These are perfect results on the training set, but it's likely that the model **overfitted**. We'll confirm this later in the final evaluation step.
+
+
+## Step 4.4.2: AdaBoost
+
+AdaBoost stands for Adaptive Boosting. It builds multiple weak learners (usually decision stumps) and focuses more on mistakes from previous rounds. Over time, it combines them into a stronger classifier.
+
+```{r ada-training}
+set.seed(123)
+
+ada_adabag_model <- boosting(
+  label ~ .,
+  data = train,
+  boos = TRUE,
+  mfinal = 50
+)
+
+ada_adabag_preds <- predict.boosting(ada_adabag_model, newdata = train)
+```
+
+Now let's see the results of the model:
+
+```{r}
+table_pred <- table(Predicted = ada_adabag_preds$class, Actual = train$label)
+print(table_pred)
+
+accuracy <- sum(diag(table_pred)) / sum(table_pred)
+cat("Training Accuracy:", round(accuracy, 4))
+```
+
+While the overall accuracy is strong, the number of false positives is noticeably higher than false negatives. This suggests the model is slightly biased toward predicting class 0 (open) more confidently.
+
+AdaBoost improved performance over the baseline models and maintained balance across both classes. It performed very well on the training set without overfitting to the extent seen in Random Forest. We'll see how this ends up during test set evaluation.
+
+
+## Step 4.4.3: XGBoost
+
+XGBoost is a boosting algorithm that builds trees sequentially, learning from the mistakes of the previous ones.
+
+Prepare the training matrix for XGBoost
+```{r xgb-prep}
+xgb_train <- train
+xgb_label <- as.numeric(xgb_train$label) - 1
+xgb_train <- xgb_train %>% select(-label)
+xgb_matrix <- xgb.DMatrix(data = as.matrix(xgb_train), label = xgb_label)
+```
+
+Train the model with 100 boosting rounds
+```{r xgb-training}
+set.seed(123)
+xgb_model <- xgboost(
+  data = xgb_matrix,
+  objective = "binary:logistic",
+  nrounds = 100,
+  verbose = 0
+)
+```
+
+Now let's see the results:
+
+```{r}
+xgb_preds_prob <- predict(xgb_model, xgb_matrix)
+xgb_preds <- ifelse(xgb_preds_prob > 0.5, "1-closed", "0-open")
+xgb_preds <- factor(xgb_preds, levels = c("0-open", "1-closed"))
+confusionMatrix(xgb_preds, train$label)
+```
+
+XGBoost achieved nearly perfect performance with an accuracy of 99.89% on the training set. The confusion matrix shows only 9 misclassifications out of 8193 records. Sensitivity and specificity are both above 99%, confirming that the model is accurately detecting both open and closed eyelid cases. Unlike Random Forest, which overfitted completely, XGBoost achieved strong performance with slightly more generalization capacity. We'll see if this holds up when tested on unseen data.
+
+
+## Step 5: Test Set Evaluation
+
+```{r test-prep}
+# Preprocess test set: drop EEG6, impute EEG3 and EEG9
+test <- test %>% select(-EEG6)
+test$EEG3[is.na(test$EEG3)] <- mean(train$EEG3, na.rm = TRUE)
+test$EEG9[is.na(test$EEG9)] <- mean(train$EEG9, na.rm = TRUE)
+
+# Convert label column to factor
+test$label <- as.factor(test$Class)
+test <- test %>% select(-Class)
+```
+
+## Step 5.1: Evaluate models on the test set
+
+Now, we will see how our models from Decision Tree, SVM, and KNN shows up on unseen data.
+
+```{r test-prediction}
+# Predict on test set
+dt_test_preds <- predict(dt_model, newdata = test)
+svm_test_preds <- predict(svm_model, newdata = test)
+knn_test_preds <- predict(knn_model, newdata = test)
+
+# Convert true labels to factor for comparison
+true_labels <- test$label
+
+# Compute metrics
+dt_metrics <- c(
+  Accuracy = Accuracy(dt_test_preds, true_labels),
+  Precision = Precision(dt_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(dt_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(dt_test_preds, true_labels, positive = "1-closed")
+)
+
+svm_metrics <- c(
+  Accuracy = Accuracy(svm_test_preds, true_labels),
+  Precision = Precision(svm_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(svm_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(svm_test_preds, true_labels, positive = "1-closed")
+)
+
+knn_metrics <- c(
+  Accuracy = Accuracy(knn_test_preds, true_labels),
+  Precision = Precision(knn_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(knn_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(knn_test_preds, true_labels, positive = "1-closed")
+)
+```
+
+
+## Step 5.2: Evaluate Random Forest, AdaBoost, XGBoost
+
+And last part of Step 5, which is measuring the metrics for  the remaining models:
+
+```{r model-metrics}
+# Random Forest
+rf_test_preds <- predict(rf_model, newdata = test)
+rf_metrics <- c(
+  Accuracy = Accuracy(rf_test_preds, true_labels),
+  Precision = Precision(rf_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(rf_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(rf_test_preds, true_labels, positive = "1-closed")
+)
+
+# AdaBoost (adabag)
+ada_test_preds <- predict.boosting(ada_adabag_model, newdata = test)$class
+ada_test_preds <- factor(ada_test_preds, levels = c("0-open", "1-closed"))
+ada_metrics <- c(
+  Accuracy = Accuracy(ada_test_preds, true_labels),
+  Precision = Precision(ada_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(ada_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(ada_test_preds, true_labels, positive = "1-closed")
+)
+
+# XGBoost
+xgb_test <- test %>% select(-label)
+xgb_test_matrix <- xgb.DMatrix(data = as.matrix(xgb_test))
+xgb_test_preds_prob <- predict(xgb_model, xgb_test_matrix)
+xgb_test_preds <- ifelse(xgb_test_preds_prob > 0.5, "1-closed", "0-open")
+xgb_test_preds <- factor(xgb_test_preds, levels = c("0-open", "1-closed"))
+xgb_metrics <- c(
+  Accuracy = Accuracy(xgb_test_preds, true_labels),
+  Precision = Precision(xgb_test_preds, true_labels, positive = "1-closed"),
+  Recall = Recall(xgb_test_preds, true_labels, positive = "1-closed"),
+  F1 = F1_Score(xgb_test_preds, true_labels, positive = "1-closed")
+)
+```
+
+## Step 6: Performance Comparison Table
+
+```{r perf-table}
+# Combine all results into a single dataframe
+results_df <- rbind(
+  DecisionTree = dt_metrics,
+  SVM = svm_metrics,
+  KNN = knn_metrics,
+  RandomForest = rf_metrics,
+  AdaBoost = ada_metrics,
+  XGBoost = xgb_metrics
+) %>% 
+  round(4) %>%
+  as.data.frame()
+
+# Show results as a table
+results_df %>%
+  rownames_to_column("Model") %>%
+  kbl(caption = "Model Performance on Test Set", format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## Step 7: Final Insights
+
+XGBoost achieved the highest overall performance on the test set with an accuracy of 89.32% and the best F1-score of 0.8682, indicating both precision and recall were well balanced.
+
+Random Forest and AdaBoost also performed strongly, confirming the benefit of ensemble learning. Random Forest had slightly higher recall but lower precision compared to XGBoost.
+
+KNN and SVM provided solid middle-ground performance, outperforming the Decision Tree baseline by a significant margin.
+
+The Decision Tree model, while simple, had the weakest results on the test set and showed high recall but low precision — meaning it frequently misclassified open eyes as closed.
+
+Overall, XGBoost is the recommended model for deployment in predicting eyelid state based on EEG signals.
+
+
+```{r render-time}
+Sys.time()
+```

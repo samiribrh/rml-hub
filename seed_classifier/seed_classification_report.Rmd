@@ -1,0 +1,212 @@
+# Seed Classification Report
+
+## Overview
+
+This report presents a comprehensive analysis and classification of different seed types using decision tree models.
+
+## 1. Importing Libraries and preparing the Dataset
+
+We begin by loading the necessary libraries and reading in the dataset.
+
+```{r}
+# Load necessary packages
+library(tidyverse)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+
+# Import the dataset
+seeds <- read.csv("C:/Users/Samir/OneDrive - IMC/Desktop/ML/seeds.csv")
+
+
+# Check for missing values
+sum(is.na(seeds))
+```
+
+We found a few missing values. We remove any rows containing NA values and then verify dataset is clean.
+
+```{r}
+# Remove rows with missing values
+seeds <- na.omit(seeds)
+
+
+# Check again to confirm
+sum(is.na(seeds))
+```
+
+Now we inspect the structure of the dataset and convert the target column (Class) to a factor.
+
+
+```{r}
+
+# Check the structure of the dataset
+str(seeds)
+
+# Convert the 'Class' column to a factor
+seeds$Class <- as.factor(seeds$Class)
+
+# Check for confirmation
+str(seeds$Class)
+```
+
+Finally for this part, we generate summary statistics to understand the spread and scale of each feature.
+
+```{r}
+# View summary statistics of the dataset
+summary(seeds)
+```
+
+
+## 2. Data Exploration
+
+We begin our data exploration by visualizing the distributions of some key features across the three seed types using boxplots.
+
+```{r}
+# Boxplot of Area by Class
+ggplot(seeds, aes(x = Class, y = Area, fill = Class)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Area by Seed Type", y = "Area", x = "Seed Type")
+```
+
+```{r}
+# Density plot of Compactness by Class
+ggplot(seeds, aes(x = Compactness, fill = Class)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Density Plot - Compactness by Class") +
+  theme_minimal()
+```
+
+```{r}
+# Correlation heatmap (excluding Class)
+cor_matrix <- cor(seeds %>% select(-Class))
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.8)
+```
+
+## 3. Splitting the Dataset
+
+We split the dataset into a training set (80%) and a test set (20%) using the `caret` package.
+
+```{r}
+# Set seed for reproduction
+set.seed(123)
+
+# Create the train/test split index
+split_index <- createDataPartition(seeds$Class, p = 0.8, list = FALSE)
+
+# Split the data
+train_data <- seeds[split_index, ]
+test_data <- seeds[-split_index, ]
+
+# Check the dimensions of each set
+dim(train_data)
+dim(test_data)
+```
+
+
+## 4a. Training a Decision Tree (Default Stopping Criteria) 
+
+We train a decision tree classifier using default stopping rules.
+
+```{r}
+# Train the decision tree model with default settings
+tree_default <- rpart(Class ~ ., data = train_data, method = "class")
+
+# Plot the decision tree
+rpart.plot(tree_default, main = "Decision Tree - Default Stopping")
+```
+
+
+## 4b.Training a Full Grown Decision Tree (Without Stopping Criteria)
+
+We’ll force the tree to grow as much as possible by adjusting the control parameters minsplit and cp.
+
+```{r}
+# Train a fully grown decision tree
+tree_full <- rpart(Class ~ ., data = train_data, method = "class",
+                   control = rpart.control(cp = 0, minsplit = 1))
+
+# Plot the fully grown tree
+rpart.plot(tree_full, main = "Fully Grown Decision Tree")
+```
+
+## 4c. Pruning the Fully Grown Tree
+
+We now prune the fully grown tree from step 4b to reduce overfitting. We begin by examining the complexity parameter (cp) table, which shows how error changes with each level of pruning. Then we identify the cp value that minimizes the cross-validation error and prune the tree accordingly.
+
+```{r}
+# Display the complexity parameter table
+printcp(tree_full)
+
+# Visualize cp vs. cross-validation error
+plotcp(tree_full)
+
+
+# Select the best cp value (lowest cross-validation error)
+best_cp <- tree_full$cptable[which.min(tree_full$cptable[, "xerror"]), "CP"]
+
+# Prune the tree using the optimal cp value
+tree_pruned <- prune(tree_full, cp = best_cp)
+
+# Plot the pruned tree
+rpart.plot(tree_pruned, main = "Pruned Decision Tree")
+```
+
+
+## 5. Model Evaluation
+
+We now compare the performance of the three models — default, fully grown, and pruned — using the test set. 
+
+```{r}
+# Predict using default tree
+pred_default <- predict(tree_default, test_data, type = "class")
+confusionMatrix(pred_default, test_data$Class)
+```
+
+```{r}
+# Predict using fully grown tree
+pred_full <- predict(tree_full, test_data, type = "class")
+confusionMatrix(pred_full, test_data$Class)
+```
+
+```{r}
+# Predict using pruned tree
+pred_pruned <- predict(tree_pruned, test_data, type = "class")
+confusionMatrix(pred_pruned, test_data$Class)
+```
+
+
+## 6. Repeating only three features
+
+We now repeat the classification task using only three features: Area, Perimeter, and Compactness.
+
+## 6a. Prepare the data with selected features
+
+```{r}
+# Select only three features + target
+seeds_small <- seeds %>% select(Area, Perimeter, Compactness, Class)
+
+# Train/test split
+set.seed(123)
+split_index_small <- createDataPartition(seeds_small$Class, p = 0.8, list = FALSE)
+train_small <- seeds_small[split_index_small, ]
+test_small <- seeds_small[-split_index_small, ]
+```
+
+## 6b. Train and evaluate decision tree (default)
+
+```{r}
+# Train model with default settings
+tree_small <- rpart(Class ~ ., data = train_small, method = "class")
+
+# Predict on test set
+pred_small <- predict(tree_small, test_small, type = "class")
+
+# Evaluate
+confusionMatrix(pred_small, test_small$Class)
+```
+
+## 6c. Comparison and Conclusion
+
+The accuracy and metrics from the three-features model (Area, Perimeter, Compactness) can now be compared with the full-feature models. Based on the confusion matrix, we observe that accuracy slightly decreased from 91% to 90%.
