@@ -1,0 +1,270 @@
+---
+title: "Drilling Machine"
+author: "Samir Ibrahimov"
+date: "2025-05-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  error = FALSE
+  )
+```
+
+## Overview
+The goal of this task is to determine how many distinct states a newly purchased drilling machine operates in, based on 400 unlabeled observations of two operational variables. We will use three clustering techniques — K-means, Hierarchical Clustering, and DBSCAN. Each technique will be applied independently, followed by a comparison of the resulting cluster memberships to determine whether they reveal consistent operational states.
+
+## 1. Importing libraries
+
+```{r}
+# Load required packages
+library(tidyverse)    # Data manipulation and plotting
+library(factoextra)   # Visualization of clustering results
+library(cluster)      # Silhouette and clustering functions
+library(dbscan)       # DBSCAN algorithm
+library(dendextend)   # Dendrogram manipulation for hierarchical clustering
+library(gridExtra)    # For gridding multiple graphs
+```
+
+
+## 2. Loading and Exploring the dataset
+
+We now load the drilling.csv file and perform initial exploratory checks to understand the data structure and confirm it's clean and ready for clustering.
+
+```{r}
+# Load the dataset
+drill_data <- read.csv("drilling.csv")
+
+# View the first few rows
+head(drill_data)
+
+# Check the structure of the data
+str(drill_data)
+
+# Check for missing values
+sum(is.na(drill_data))
+
+# Summary statistics
+summary(drill_data)
+```
+
+This step verifies the dataset contains 400 observations and two numeric features (likely sensor measurements). Ensuring there are no missing values.
+
+
+## 3. Visualizing the raw data
+
+We plot the 2D scatter of the observations to visually assess whether distinct groupings or clusters are already apparent.
+
+```{r}
+# Scatter plot of the raw data
+ggplot(drill_data, aes(x = x, y = y)) +
+  geom_point(alpha = 0.7, color = "steelblue") +
+  theme_minimal() +
+  labs(title = "Scatter Plot of Drilling Machine Measurements",
+       x = "Measurement X",
+       y = "Measurement Y")
+```
+
+From the scatter plot of the 400 observations, we can observe that the data points are not uniformly distributed. Instead, they appear to form several distinct, dense groupings. Specifically, there seem to be four natural clusters, as the points tend to form tight, well-separated blobs. This suggests that the drilling machine likely operates in multiple distinct modes or states. 
+
+
+## 4. K-means clustering
+
+To apply K-means clustering effectively, we first need to determine the optimal number of clusters (k). We use the Elbow Method, which plots the total within-cluster sum of squares (WSS) for increasing values of k.
+
+```{r}
+# Elbow method to determine optimal number of clusters
+set.seed(123)
+fviz_nbclust(drill_data, kmeans, method = "wss", k.max = 10) +
+  labs(title = "Elbow Method for Optimal K (K-Means)",
+       x = "Number of Clusters (k)",
+       y = "Within-Cluster Sum of Squares (WSS)")
+```
+
+From the elbow plot, the WSS significantly decreases up to k = 4, and then the slope levels off. This clearly indicates that 4 is the optimal number of clusters, which matches our earlier visual assessment from the scatter plot. However, it is also worth considering k = 3 as a potential option, since the decrease in WSS from k = 3 to k = 4 is relatively small compared to the drop from k = 2 to k = 3. This indicates that while k = 4 may be optimal, k = 3 could also provide a solution with a slightly lower complexity.
+
+
+## 5. Applying K-means with k=4
+
+We first cluster the data using the elbow-suggested value k = 4.
+
+```{r}
+# Apply K-means with k = 4
+set.seed(123)
+k4_result <- kmeans(drill_data[, c("x", "y")], centers = 4, nstart = 25)
+
+# Add cluster labels to data
+drill_data$k4_cluster <- as.factor(k4_result$cluster)
+
+# Plot the clustering result
+ggplot(drill_data, aes(x = x, y = y, color = k4_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "K-Means Clustering Result (k = 4)", color = "Cluster")
+```
+
+With k = 4, the algorithm separates the data into four distinct groups that correspond to the main operational states. The clusters appear balanced and well-separated, confirming this as a strong candidate for modeling the machine’s behavior.
+
+
+## 6. Exploring substructure with k=3
+
+Given the secondary drop in the WSS at k = 3, we repeat the clustering to see if a group of three shows meaningful structure.
+
+```{r}
+# Apply K-means with k = 3
+set.seed(123)
+k3_result <- kmeans(drill_data[, c("x", "y")], centers = 3, nstart = 25)
+
+# Add cluster labels
+drill_data$k3_cluster <- as.factor(k3_result$cluster)
+
+# Plot both k = 4 and k = 3 side by side
+plot_k4 <- ggplot(drill_data, aes(x = x, y = y, color = k4_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "K-Means Clustering (k = 4)", color = "Cluster")
+
+plot_k3 <- ggplot(drill_data, aes(x = x, y = y, color = k3_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "K-Means Clustering (k = 3)", color = "Cluster")
+
+grid.arrange(plot_k4, plot_k3, ncol = 2)
+```
+
+With k = 3, the clustering effectively separates the data into three main groups, but it merges two clearly separate clusters seen in the k = 4 result. This indicates that k = 3 may be too harsh, combining states that are more distinct when visualized separately.
+
+With k = 4, the clusters are more compact and better separated, especially in the lower region, where two previously merged clusters are clearly distinguished. This confirms that the additional cluster helps in capturing finer details of the machine’s operational states.
+
+The k = 4 result aligns better with the visual distribution observed in the scatter plot and the elbow method's suggestion. This indicates that the drilling machine likely operates in four primary states rather than three.
+
+
+## 7. Hierarchial clustering
+
+Hierarchical clustering is useful for visualizing the hierarchical relationships between data points. We will experiment with different linkage methods to find the most consistent clustering.
+
+### 7a. Dendrogram using complete linkage
+
+```{r}
+# Compute the distance matrix
+dist_matrix <- dist(drill_data[, c("x", "y")])
+
+# Apply hierarchical clustering using complete linkage
+hc_complete <- hclust(dist_matrix, method = "complete")
+
+# Plot the dendrogram
+fviz_dend(hc_complete, k = 4, rect = TRUE, 
+          main = "Dendrogram (Complete Linkage)", 
+          xlab = "Observations", ylab = "Height")
+```
+
+We observe four distinct clusters at the chosen cut height, which aligns with the elbow method and the visual assessment from the K-means clustering results. The clusters appear well-separated, indicating that Complete Linkage effectively isolates compact and distant groups.
+
+However, the height difference between clusters also hints that some groups are more tightly knit (shorter branch height), while others have greater internal variability (taller branches before merging). This suggests that some states of the drilling machine are more consistent in their operational behavior.
+
+
+### 7b. Dendogram using average linkage
+
+```{r}
+# Apply hierarchical clustering using average linkage
+hc_average <- hclust(dist_matrix, method = "average")
+
+# Plot the dendrogram
+fviz_dend(hc_average, k = 4, rect = TRUE, 
+          main = "Dendrogram (Average Linkage)", 
+          xlab = "Observations", ylab = "Height")
+```
+
+At the chosen cut height, the dendrogram also produces four clusters, similar to the complete linkage result. However, the branches are shorter, indicating that clusters are formed more gradually and the distance between groups is minimized.
+
+
+### 7c. Dendogram using Ward's method
+
+```{r}
+# Apply hierarchical clustering using Ward's method
+hc_ward <- hclust(dist_matrix, method = "ward.D2")
+
+# Plot the dendrogram
+fviz_dend(hc_ward, k = 4, rect = TRUE, 
+          main = "Dendrogram (Ward's Method)", 
+          xlab = "Observations", ylab = "Height")
+```
+
+Compared to Complete Linkage, which tends to form elongated clusters, and Average Linkage, which balances distances, Ward’s Method is highly effective for identifying globular and balanced clusters. This suggests that the machine’s operational states identified here are uniform and consistent, matching the K-means result of k = 4.
+
+
+## 8. DBSCAN clustering
+
+DBSCAN is a density-based clustering method that groups points closely packed together, marking points that are not part of any cluster as noise. It is particularly effective when clusters have irregular shapes or there is noise in the data.
+
+
+### a) Finding optimal parameters
+
+To apply DBSCAN, we need to choose two critical parameters:
+
+eps: The maximum distance between two samples to be considered in the same neighborhood.
+MinPts: The minimum number of points required to form a dense region.
+
+We will use a k-distance plot to find the optimal value of eps.
+
+```{r}
+# K-distance plot to find optimal eps
+kNNdistplot(drill_data[, c("x", "y")], k = 5)
+abline(h = 0.05, col = "red", lty = 2)
+```
+
+The k-distance plot shows a clear inflection point around eps = 0.05, which is marked with a red dashed line. This is the point where the curve sharply increases, indicating the optimal value for eps.
+
+Let’s proceed with applying DBSCAN using the chosen parameters (eps = 0.05, MinPts = 5) and visualizing the clustering result.
+
+
+### b) Applying DBSCAN with chosen parameters
+
+```{r}
+# Apply DBSCAN with eps = 0.05 and MinPts = 5
+dbscan_result <- dbscan(drill_data[, c("x", "y")], eps = 0.05, minPts = 5)
+
+# Add cluster labels to data
+drill_data$dbscan_cluster <- as.factor(dbscan_result$cluster)
+
+# Plot the DBSCAN clustering result
+ggplot(drill_data, aes(x = x, y = y, color = dbscan_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "DBSCAN Clustering (eps = 0.05, MinPts = 5)", color = "Cluster")
+```
+
+The DBSCAN clustering with eps = 0.05 and MinPts = 5 reveals four main clusters, similar to the results obtained from K-means and hierarchical clustering. However, DBSCAN uniquely identifies outliers or noise points (Cluster 0), shown in red, which are not part of any dense cluster.
+
+
+## 9, Final comparison of clustering methods
+
+```{r}
+# Plot comparison: K-means (k = 4), Hierarchical (Ward's), DBSCAN
+plot_kmeans <- ggplot(drill_data, aes(x = x, y = y, color = k4_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "K-means clustering", color = "Cluster")
+
+plot_hc <- ggplot(drill_data, aes(x = x, y = y, color = as.factor(cutree(hc_ward, k = 4)))) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Hierarchical clustering", color = "Cluster")
+
+plot_dbscan <- ggplot(drill_data, aes(x = x, y = y, color = dbscan_cluster)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "DBSCAN clustering", color = "Cluster")
+
+# Arrange plots for comparison
+grid.arrange(plot_kmeans, plot_hc, plot_dbscan, ncol = 3)
+```
+
+The clustering analysis of the drilling machine's operational data was performed using three different methods: K-means, Hierarchical clustering, and DBSCAN. All three methods consistently identified four primary clusters, indicating that the drilling machine operates predominantly in four distinct states. This agreement between methods increases confidence in the results.
+
+However, there are differences. K-means and Ward's method produced well-separated clusters, assigning every point to a group, which is effective for identifying compact states but lacks noise detection. In contrast, DBSCAN identified the same four clusters but also marked noise points (Cluster 0), making it more robust in detecting anomalies or transitional states.
+
+Since the primary goal is to detect the operational states of the drilling machine, K-means (k = 4) or Hierarchical Clustering (Ward's) methods are recommended for capturing the core states effectively. However, if identifying noisy or irregular data points is also crucial, DBSCAN is preferable due to its ability to separate noise from valid clusters.
