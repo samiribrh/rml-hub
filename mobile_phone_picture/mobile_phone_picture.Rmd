@@ -1,0 +1,171 @@
+---
+title: "3.1 Mobile Phone Picture"
+author: "Samir Ibrahimov"
+date: "2025-05-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  error = FALSE
+  )
+```
+
+## Overview
+The aim of this section is to reduce the number of RGB colors in a smartphone photo using K-means clustering. We'll use the Elbow method to select the appropriate number of color clusters and evaluate how image detail changes with different k values. The image contains a paper with the name "SAMIR" and background elements to ensure a rich color palette.
+
+## 1. Importing libraries
+
+```{r}
+# Load required packages
+library(imager)
+library(tidyverse)
+library(reshape2)
+```
+imager is used for image handling, tidyverse for data manipulation, and reshape2 to help transform image data for clustering.
+
+
+## 2. Loading and displaying the image
+
+```{r}
+# Load the resized image
+img <- load.image("IMG_8170.jpg")
+
+# Display the image
+plot(img, main = "Original Resized Image (256x256)")
+```
+
+This verifies that the image was properly loaded. 
+
+
+## 3. Transforming Image into RGB Data Frame
+
+To apply K-means, we need the image in a data frame where each row represents a pixel and columns represent the Red, Green, and Blue color channels. We extract and reshape this from the image object.
+
+```{r}
+# Convert image to data frame
+img_df <- as.data.frame(img)
+
+# Spread the color channels into separate columns
+img_rgb <- img_df %>%
+  select(x, y, cc, value) %>%
+  spread(key = cc, value = value)
+
+# Rename color columns for clarity
+colnames(img_rgb) <- c("x", "y", "R", "G", "B")
+
+# Keep only RGB values for clustering
+rgb_data <- img_rgb[, c("R", "G", "B")]
+```
+
+Each pixel is originally stored in long format, where each RGB value is in a separate row. We reshape it to wide format so each row contains the full RGB information for one pixel. This clean RGB matrix is required input for K-means.
+
+
+## 4. Determining the optimal number of clusters (Elbow method)
+
+To identify the best value for k in K-means clustering, we use the Elbow Method. This involves calculating the within-cluster sum of squares (WSS) for different values of k and plotting them to find the "elbow" point — where increasing k yields returns in reducing WSS.
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Compute WSS for k from 1 to 15
+wss <- map_dbl(1:15, function(k) {
+  kmeans(rgb_data, centers = k, nstart = 5)$tot.withinss
+})
+
+# Plot the Elbow Curve
+plot(1:15, wss, type = "b", pch = 19,
+     xlab = "Number of Clusters (k)",
+     ylab = "Total Within-Cluster Sum of Squares (WSS)",
+     main = "Elbow Method for Selecting k")
+```
+
+The elbow point is the value of k where the WSS curve bends and starts to flatten. This point suggests the optimal number of color clusters for compressing the image with minimal loss of detail. We see from the graph that k=4 is the optimal point for us.
+
+
+## 5. Applying K-means clustering to the image
+
+Now that we’ve selected k = 4 as the optimal number of clusters based on the elbow method, we apply K-means clustering to the RGB pixel values. Each pixel will be assigned to one of the four color groups, and its color will be replaced by the average color of that cluster.
+
+```{r}
+# Set k to 4 based on elbow result
+k <- 4
+set.seed(123)
+
+# Apply k-means clustering
+kmeans_result <- kmeans(rgb_data, centers = k, nstart = 5)
+
+# Map each pixel to its cluster's centroid color
+cluster_colors <- kmeans_result$centers[kmeans_result$cluster, ]
+
+# Create a new data frame with clustered color values
+img_compressed <- img_rgb
+img_compressed$R <- cluster_colors[, "R"]
+img_compressed$G <- cluster_colors[, "G"]
+img_compressed$B <- cluster_colors[, "B"]
+```
+
+This step reduces the color palette of the original image from thousands of RGB combinations to just 4.
+
+
+## 6. Reconstructing and displaying the final image
+
+We’ll now rebuild the image from the clustered RGB values and plot the new image, which should visually resemble the original but with only 4 dominant colors.
+
+```{r}
+# Reshape each color vector back into a 256x256 matrix
+R_channel <- as.cimg(matrix(img_compressed$R, 256, 256))
+G_channel <- as.cimg(matrix(img_compressed$G, 256, 256))
+B_channel <- as.cimg(matrix(img_compressed$B, 256, 256))
+
+# Combine channels into one color image
+img_kmeans <- imappend(list(R_channel, G_channel, B_channel), axis = "c")
+
+# Plot the compressed image
+plot(img_kmeans, main = "Image After K-Means Compression (k = 4)")
+```
+
+
+## 6b. Comparing with a higher k value (k=8)
+
+To better understand the impact of color complexity, we re-run the K-means clustering with k = 8 and visualize the result.
+
+```{r}
+# Apply K-means clustering with k = 8
+k_alt <- 8
+set.seed(123)
+kmeans_result_8 <- kmeans(rgb_data, centers = k_alt, nstart = 5)
+
+# Map each pixel to its new cluster's centroid color
+cluster_colors_8 <- kmeans_result_8$centers[kmeans_result_8$cluster, ]
+
+# Build a new compressed image
+img_compressed_8 <- img_rgb
+img_compressed_8$R <- cluster_colors_8[, "R"]
+img_compressed_8$G <- cluster_colors_8[, "G"]
+img_compressed_8$B <- cluster_colors_8[, "B"]
+
+# Reconstruct image from RGB channels
+R8 <- as.cimg(matrix(img_compressed_8$R, 256, 256))
+G8 <- as.cimg(matrix(img_compressed_8$G, 256, 256))
+B8 <- as.cimg(matrix(img_compressed_8$B, 256, 256))
+img_kmeans_8 <- imappend(list(R8, G8, B8), axis = "c")
+
+# Plot the image with k = 8
+plot(img_kmeans_8, main = "Image After K-Means Compression (k = 8)")
+```
+
+This version uses more color clusters, which increases the image’s richness and accuracy in color reproduction. Compared to the 4-color version, it captures smoother gradients and finer differences, such as the transition in shadows or reflections.
+
+## 7. Conclusion
+
+We applied K-means clustering to perform color quantization on a real-world image. The process involved reducing the number of unique RGB colors to a smaller set of representative colors to observe how color simplification affects image detail and clarity.
+
+Using the Elbow Method, we selected k = 4 as the optimal number of clusters, and the resulting image preserved the key structure while simplifying color variety. It effectively reduced noise and compressed the visual information, but with some loss of subtle gradients, especially in shadow and reflection areas.
+
+To explore the trade-off between compression and visual detail, we also experimented with k = 8. This version retained finer color transitions and provided a more faithful representation of areas like the drink can, cloth pouch, and paper edges. 
+
